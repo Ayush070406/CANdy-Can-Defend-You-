@@ -1,55 +1,92 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Bot, User } from 'lucide-react';
 
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const GEMINI_MODEL = 'gemini-2.0-flash';
+
 export default function Chat() {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef = useRef(null);
 
-    // Load from local DB simulation
     useEffect(() => {
         const saved = localStorage.getItem('candy_chat_history');
         if (saved) {
             setMessages(JSON.parse(saved));
         } else {
-            setMessages([{ id: 1, text: "Hello! I am Candy (CAN Defend You). How can I assist you in understanding the law today?", sender: 'bot' }]);
+            setMessages([{ id: 1, text: 'Hello! I am Candy (CAN Defend You). How can I assist you in understanding the law today?', sender: 'bot' }]);
         }
     }, []);
 
-    // Save to DB when messages change
     useEffect(() => {
         localStorage.setItem('candy_chat_history', JSON.stringify(messages));
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        if (!input.trim()) return;
+    const askGemini = async (prompt) => {
+        if (!GEMINI_API_KEY) {
+            throw new Error('Gemini API key is not configured.');
+        }
 
-        const newMsg = { id: Date.now(), text: input, sender: 'user' };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{
+                            text: `You are Candy, a friendly legal information assistant for CANdy. Answer clearly, briefly, and safely. Mention that this is general information and advise consulting a qualified advocate for serious or personalized legal matters.\n\nUser question: ${prompt}`,
+                        }],
+                    },
+                ],
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData?.error?.message || 'Unable to reach Gemini right now.');
+        }
+
+        const data = await response.json();
+        return data?.candidates?.[0]?.content?.parts?.[0]?.text || 'I am not sure how to answer that right now. Please try again.';
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const trimmedInput = input.trim();
+        if (!trimmedInput || isLoading) return;
+
+        const newMsg = { id: Date.now(), text: trimmedInput, sender: 'user' };
         setMessages(prev => [...prev, newMsg]);
         setInput('');
+        setIsLoading(true);
 
-        // Simulate Bot typing response
-        setTimeout(() => {
-            const botResponses = [
-                "According to the constitutional framework, your fundamental rights are protected. I can help clarify specific sections if you provide more details.",
-                "That's an excellent legal query. While I am an AI, I suggest you also consider consulting an advocate through our booking system for comprehensive legal advice.",
-                "Under current law, there are specific guidelines that regulate this scenario. Can you be more specific?",
-                "Remember, law is about interpretation. Based on precedents, your rights include right to life and liberty.",
-                "Your query involves civil liberties. Are you looking to file a consumer complaint or a regular civil suit?"
-            ];
+        try {
+            const answer = await askGemini(trimmedInput);
             const botResponse = {
                 id: Date.now() + 1,
-                text: botResponses[Math.floor(Math.random() * botResponses.length)],
-                sender: 'bot'
+                text: answer,
+                sender: 'bot',
             };
             setMessages(prev => [...prev, botResponse]);
-        }, 1200);
+        } catch (error) {
+            const fallback = {
+                id: Date.now() + 1,
+                text: error.message || 'I was unable to respond right now. Please try again shortly.',
+                sender: 'bot',
+            };
+            setMessages(prev => [...prev, fallback]);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleClear = () => {
-        const defaultMsg = [{ id: 1, text: "Hello! I am Candy (CAN Defend You). How can I assist you in understanding the law today?", sender: 'bot' }];
+        const defaultMsg = [{ id: 1, text: 'Hello! I am Candy (CAN Defend You). How can I assist you in understanding the law today?', sender: 'bot' }];
         setMessages(defaultMsg);
         localStorage.setItem('candy_chat_history', JSON.stringify(defaultMsg));
     };
@@ -70,6 +107,12 @@ export default function Chat() {
                         <div>{msg.text}</div>
                     </div>
                 ))}
+                {isLoading && (
+                    <div className="message bot" style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+                        <div style={{ flexShrink: 0, opacity: 0.7 }}><Bot size={20} /></div>
+                        <div>Thinking...</div>
+                    </div>
+                )}
                 <div ref={messagesEndRef} />
             </div>
 
@@ -80,8 +123,9 @@ export default function Chat() {
                         placeholder="Ask your legal question..."
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
+                        disabled={isLoading}
                     />
-                    <button type="submit" className="btn btn-primary" disabled={!input.trim()}>
+                    <button type="submit" className="btn btn-primary" disabled={!input.trim() || isLoading}>
                         <Send size={18} />
                     </button>
                 </form>
